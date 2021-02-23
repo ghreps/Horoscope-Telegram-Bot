@@ -1,4 +1,5 @@
 import logging
+import locale
 import typing
 import emoji
 import json
@@ -9,6 +10,7 @@ from aiogram import Bot, types
 from aiogram.types import ParseMode
 from aiogram.dispatcher import Dispatcher
 from aiogram.utils import executor
+from aiogram.utils.markdown import escape_md
 from aiogram.utils.callback_data import CallbackData
 
 from defines import ZODIACS, MONTH_RU, DAILY
@@ -24,6 +26,8 @@ DAY_TEXT = [
     'послезавтра'
 ]
 
+locale.setlocale(locale.LC_ALL, ('ru_RU', 'UTF-8'))
+
 config = Config()
 
 CHANNEL_ID = config.get_int('TELEGRAM', 'channel_id')
@@ -35,14 +39,14 @@ dp = Dispatcher(bot)
 
 async def send_msg(msg):
     try:
-        await bot.send_message(TOKEN, msg)
+        await bot.send_message(TOKEN, escape_md(msg))
     except Exception as error:
         print(error)
 
 async def send_error_msg(file, function, msg):
     print(file, function)
     text = '`[{0}][{1}] {2}`'.format(
-        file, function, msg
+        file, function, escape_md(msg)
     )
     try:
         await bot.send_message(ADMIN_ID, text)
@@ -52,7 +56,7 @@ async def send_error_msg(file, function, msg):
 @dp.message_handler(commands=['start'])
 async def call_start_command(message: types.Message):
     await message.answer(
-        'Приветствую! Алалала тут будет текст приветствия',
+        'Приветствую\\! Алалала тут будет текст приветствия',
         reply_markup=main_menu
     )
 
@@ -61,7 +65,7 @@ async def call_start_command(message: types.Message):
 async def call_daily_menu(call: types.CallbackQuery, callback_data: typing.Dict[str, str]):
     await bot.send_message(
         call.from_user.id,
-        'Ежедневный гороскоп на...',
+        escape_md('Ежедневный гороскоп на...'),
         reply_markup=daily_menu
     )
 
@@ -71,9 +75,10 @@ async def call_daily_submenu(call: types.CallbackQuery, callback_data: typing.Di
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     keyboard.add(*daily_types_btns(callback_data['params']))
+    msg = 'Гороскоп на {0}...'.format(DAY_TEXT[int(callback_data['params'])])
     await bot.send_message(
         call.from_user.id,
-        'Гороскоп на {0}...'.format(DAY_TEXT[int(callback_data['params'])]),
+        escape_md(msg),
         reply_markup=keyboard
     )
 
@@ -85,8 +90,7 @@ async def call_query_view(call: types.CallbackQuery, callback_data: typing.Dict[
             msg = parse_daily(f, params)
     await bot.send_message(
         call.from_user.id,
-        ''.join(msg),
-        parse_mode=ParseMode.MARKDOWN,
+        escape_md(''.join(msg)),
         reply_markup=main_menu
     )
 
@@ -164,6 +168,9 @@ def parse_daily(file, params):
                         ), use_aliases=True
                     ))
     return text
+
+def escape(text):
+    pass
 
 def telegram_start():
     executor.start_polling(dp)

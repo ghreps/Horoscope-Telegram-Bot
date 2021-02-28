@@ -46,6 +46,13 @@ class Database():
             self.session.rollback()
             raise error
 
+    def close(self):
+        try:
+            self.session.close()
+        except exc.SQLAlchemyError as error:
+            self.session.rollback()
+            raise error
+
     def create_db_engine(self):
         url = URL(
             'mysql+pymysql',

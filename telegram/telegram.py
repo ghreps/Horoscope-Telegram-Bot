@@ -10,7 +10,7 @@ from aiogram import Bot, types
 from aiogram.types import ParseMode
 from aiogram.dispatcher import Dispatcher
 from aiogram.utils import executor
-from aiogram.utils.markdown import escape_md
+from aiogram.utils.markdown import escape_md, bold as bold_md, text as text_md
 from aiogram.utils.callback_data import CallbackData
 
 from defines import ZODIACS, MONTH_RU, DAILY
@@ -26,7 +26,7 @@ DAY_TEXT = [
     'послезавтра'
 ]
 
-locale.setlocale(locale.LC_ALL, ('ru_RU', 'UTF-8'))
+locale.setlocale(locale.LC_ALL, ('ru_RU', 'utf-8'))
 
 config = Config()
 
@@ -39,7 +39,7 @@ dp = Dispatcher(bot)
 
 async def send_msg(msg):
     try:
-        await bot.send_message(TOKEN, escape_md(msg))
+        await bot.send_message(CHANNEL_ID, msg)
     except Exception as error:
         print(error)
 
@@ -90,7 +90,7 @@ async def call_query_view(call: types.CallbackQuery, callback_data: typing.Dict[
             msg = parse_daily(f, params)
     await bot.send_message(
         call.from_user.id,
-        escape_md(''.join(msg)),
+        ''.join(msg),
         reply_markup=main_menu
     )
 
@@ -118,59 +118,37 @@ def parse_daily(file, params):
         if row[0] == 'daily_'+params[1]:
             horo_id = str(i+1)
     day = int(params[0])
-    # If not all days
-    if day != '-1':
-        for foo, root_value in json_text.items():
-            if root_value['horo_id'] == horo_id:
-                if root_value['day'] == str(day):
-                    # Date
-                    date = datetime.strptime(root_value['date'], '%d.%m.%Y')
-                    text.append('*Ежедневный {0} гороскоп на {1} ({2} {3}, {4})*\n\n'.format(
+    for foo, root_value in json_text.items():
+        if root_value['horo_id'] == horo_id:
+            if root_value['day'] == str(day):
+                # Date
+                date = datetime.strptime(root_value['date'], '%d.%m.%Y')
+                msg_date = '({0} {1}, {2})'.format(
+                    date.strftime('%d'),
+                    MONTH_RU[date.month],
+                    date.strftime('%A')
+                )
+                text.append(
+                    bold_md(
+                        'Ежедневный {0} гороскоп на {1} {2}'.format(
                         DAILY[int(horo_id)-1][2],
                         DAY_TEXT[day],
-                        date.strftime('%d'),
-                        MONTH_RU[date.month],
-                        date.strftime('%A')
-                    ))
-                    # Zodiacs
-                    for zodiac in ZODIACS:
-                        horo_emoji = zodiac[0]
-                        if zodiac[0] == 'scorpio':
-                            horo_emoji = 'scorpius'
-                        text.append(emoji.emojize(
-                            ':{0}: {1} :{0}:\n{2}\n\n'.format(
-                            #':{0}: {1} _({2})_ :{0}:\n{3}\n\n'.format(
-                                horo_emoji,
-                                zodiac[1],
-                                #zodiac[2],
-                                root_value[zodiac[0]]
-                            ), use_aliases=True
-                        ))
-    else:
-        text.append('*Ежедневный {0} гороскоп*\n\n'.format(
-            DAILY[int(horo_id)-1][2]
-        ))
-        for foo, root_value in json_text.items():
-            if root_value['horo_id'] == horo_id:
-                date = datetime.strptime(json_text[str(day)]['date'], '%d.%m.%Y')
+                        msg_date
+                    )) + '\n\n'
+                )
                 # Zodiacs
                 for zodiac in ZODIACS:
                     horo_emoji = zodiac[0]
                     if zodiac[0] == 'scorpio':
                         horo_emoji = 'scorpius'
                     text.append(emoji.emojize(
-                        ':{0}: {1} :{0}:\n{3}\n\n'.format(
-                        #':{0}: {1} _({2})_ :{0}:\n{3}\n\n'.format(
+                        ':{0}: {1} :{0}:\n{2}\n\n'.format(
                             horo_emoji,
                             zodiac[1],
-                            #zodiac[2],
-                            root_value[zodiac[0]]
+                            escape_md(root_value[zodiac[0]])
                         ), use_aliases=True
                     ))
     return text
-
-def escape(text):
-    pass
 
 def telegram_start():
     executor.start_polling(dp)

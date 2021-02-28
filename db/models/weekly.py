@@ -1,5 +1,5 @@
 from sqlalchemy import Column
-from sqlalchemy.sql.sqltypes import Integer, SmallInteger, Date, Text
+from sqlalchemy.sql.sqltypes import Integer, SmallInteger, Text, VARCHAR
 
 from ..database import DeclarativeBase
 
@@ -9,7 +9,7 @@ class WeeklyModel(DeclarativeBase):
     __tablename__ = 'weekly'
     id = Column(Integer, primary_key=True, autoincrement=True)
     horo_id = Column(SmallInteger)
-    horo_date = Column(Date, default='2000-01-01')
+    horo_date = Column(VARCHAR(50), default='')
     aries = Column(Text, default='')
     taurus = Column(Text, default='')
     gemini = Column(Text, default='')

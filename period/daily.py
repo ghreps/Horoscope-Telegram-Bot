@@ -1,23 +1,22 @@
-from datetime import datetime
+from logging import Formatter, getLogger, FileHandler
 from xml.etree import ElementTree as ET
+from multiprocessing import Pool
+from datetime import datetime
 from os.path import exists
 from os import listdir
+from json import dump
 from re import sub
 
-from multiprocessing import Pool
-
-import json
-import logging
-import requests
-
+from requests import get as http_get
 from sqlalchemy import update
 
+from config import Config
 from db.database import Database
 from db.models import DailyModel, TypesModel
 
 from telegram.telegram import send_error_msg
 
-from defines import DAILY, ZODIACS, FORMATTER, SQLALCHEMY_ERROR_SUB, OFFSET
+from defines import DAILY, ZODIACS, SQLALCHEMY_ERROR_SUB, OFFSET
 
 LOG_NAME = "DAILY.PY"
 
@@ -27,37 +26,39 @@ class Daily:
     Функции ежедневного гороскопа:
     Скачивание, парсинг, запись в базу/кэш, обновление
     """
-    file_handler = None
+    log = getLogger(LOG_NAME)
+    config = None
 
-    log = logging.getLogger(LOG_NAME)
-    log.setLevel(logging.DEBUG)
-
-    database = None
-
-    def __init__(self):
+    def __init__(self, config):
+        self.config: Config = config
         self.read_config()
 
     def read_config(self):
         """Читаем конфиг"""
-        self.file_handler = logging.FileHandler('logs/daily.log')
-        self.file_handler.setFormatter(FORMATTER)
+        formatter = self.config.get('APP', 'formatter').replace('(', '%(')
+        file_handler = FileHandler('logs/daily.log')
+        file_handler.setFormatter(Formatter(formatter))
 
-        self.log.addHandler(self.file_handler)
+        self.log.addHandler(file_handler)
+        self.log.setLevel(self.config.get_int('DAILY', 'log_level'))
 
     async def start(self):
         """Я сказал стартуем"""
-        func_name = "START"
+        func_name = "[START] "
+        self.log.info('%sStart', func_name)
         try:
-            self.database = Database()
-            sql = self.database.session.query(TypesModel).\
+            database = Database()
+            sql = database.session.query(TypesModel).\
                 filter_by(file=DAILY[0][0]).one_or_none()
             if sql is None:  # if first run
                 self.log.info(' First run detected - db is empty')
-                await self.insert_default_rows()  # Fill sql with default data
+                await self.insert_default_rows(database)  # Fill sql with default data
                 #
                 with Pool(len(DAILY)) as pool:
                     result = pool.map_async(download_and_parse, range(len(DAILY)))
-                    for horo_id, fail in enumerate(len(result.get())):
+                    print(result)
+                    print(result.get())
+                    for horo_id, fail in enumerate(result.get()):
                         if fail:
                             await self.report_error(func_name, fail)
                         else:
@@ -68,21 +69,24 @@ class Daily:
                             )
             else:
                 await self.check_for_relevance()
-            await self.write_to_cache()
+            await self.write_to_cache(database)
         except Exception as error:
             await self.report_error(func_name, error)
+        else:
+            database.close()
+            self.log.debug('%sEnd', func_name)
 
     async def check_for_relevance(self, force=False):
-        """Проверка ежеднвеных гороскопов на актуальность"""
+        """Проверка ежедневных гороскопов на актуальность"""
         func_name = "[CHECK FOR REVELANCE] "
         self.log.info('%sStart', func_name)
         is_actual = False
-        now = datetime.now(OFFSET).strftime("%d.%m.%Y")
         try:
+            now = datetime.now(OFFSET).strftime("%d.%m.%Y")
             if len(listdir('xmls')) == 0:  # If no files - download all
                 with Pool(len(DAILY)) as pool:
                     result = pool.map_async(download_and_parse, range(len(DAILY)))
-                    for horo_id, fail in enumerate(len(result.get())):
+                    for horo_id, fail in enumerate(result.get()):
                         if fail:
                             await self.report_error(func_name, fail)
                         else:
@@ -91,7 +95,7 @@ class Daily:
                                 func_name,
                                 DAILY[horo_id][0]
                             )
-            else:
+            else:  # if at least one file exists
                 for horo_id in range(len(DAILY)):
                     file = 'xmls/%s.xml' % DAILY[horo_id][0]
                     need_download = False
@@ -127,9 +131,10 @@ class Daily:
         func_name = "[UPDATE CACHE] "
         self.log.debug('%sStart', func_name)
         try:
+            database = Database()
             if not await self.check_for_relevance(True):
                 self.log.info('%sData is not actual...', func_name)
-                await self.write_to_cache()
+                await self.write_to_cache(database)
             else:
                 self.log.debug('%sData is actual', func_name)
         except Exception as error:
@@ -137,13 +142,13 @@ class Daily:
         finally:
             self.log.debug('%sEnd', func_name)
 
-    async def write_to_cache(self):
+    async def write_to_cache(self, database: Database):
         """Считываем гороскопы с базы и пишем в кэш"""
         func_name = "[WRITE TO CACHE] "
         self.log.debug('%sStart', func_name)
         json_data = {}
         try:
-            for row in self.database.query(DailyModel).all():
+            for row in database.query(DailyModel).all():
                 json_data[row.id] = {
                     'horo_id': str(row.horo_id),
                     'day': str(row.horo_day),
@@ -162,7 +167,7 @@ class Daily:
                     'pisces':  row.pisces
                 }
             with open('cache/daily.json', 'w', encoding='utf-8') as file:
-                json.dump(
+                dump(
                     json_data,
                     file,
                     ensure_ascii=False
@@ -174,18 +179,18 @@ class Daily:
         finally:
             self.log.debug('%sEnd', func_name)
 
-    async def insert_default_rows(self):
+    async def insert_default_rows(self, database: Database):
         """Вставляем пустые строки в базу"""
         func_name = "[INSERT DEFAULT ROWS] "
         self.log.debug('%sStart', func_name)
         try:
             for horo_id, horo in enumerate(DAILY):
                 sql = TypesModel(horo_id + 1, horo[2].title(), horo[0])
-                self.database.add(sql)
+                database.add(sql)
                 for horo_day in range(4):
                     sql = DailyModel(horo_id + 1, horo_day)
-                    self.database.add(sql)
-            self.database.commit()
+                    database.add(sql)
+            database.commit()
         except Exception as error:
             raise Exception(func_name + str(error)) from error
         else:
@@ -195,8 +200,11 @@ class Daily:
 
     async def report_error(self, function: str, error: Exception):
         """Отправляем в телегу ошибку"""
-        print(str(error))
-        text = '-> %s' % sub(SQLALCHEMY_ERROR_SUB, '', str(error))
+        print(function, str(error))
+        text = '{0} -> {1}'.format(
+            function,
+            sub(SQLALCHEMY_ERROR_SUB, '', str(error))
+        )
         self.log.error(text, exc_info=True)
         await send_error_msg(LOG_NAME, function, text)
 
@@ -217,7 +225,7 @@ def download(horo_id):
     func_name = "[DOWNLOAD] "
     url = 'https://ignio.com/r/export/utf/xml/daily/%s' % DAILY[horo_id][1]
     try:
-        with requests.get(url) as request:
+        with http_get(url) as request:
             request.raise_for_status()
             return ET.fromstring(request.content)
     except Exception as error:
@@ -230,6 +238,7 @@ def parse(horo_id, xml: ET.Element):
     dates = []
     horo_texts = [[] for i in range(len(ZODIACS))]
     try:
+        database = Database()
         # Parse xml
         for i, div in enumerate(xml):
             if div.tag == 'date':
@@ -266,19 +275,20 @@ def parse(horo_id, xml: ET.Element):
                 'horo_id': horo_id + 1,
                 'texts': texts
             }
-        save_to_db(daily)
+        save_to_db(daily, database)
         # Save xml to file
         with open('xmls/%s.xml' % DAILY[horo_id][0], 'wb') as file:
             ET.ElementTree(xml).write(file, encoding='utf-8')
-        return False
     except Exception as error:
         raise Exception(func_name + str(error)) from error
+    else:
+        database.close()
+        return False  # Is fail?
 
 
-def save_to_db(params: dict):
+def save_to_db(params: dict, database: Database):
     """Сохранение в базу"""
     func_name = "[SAVE TO DB] "
-    database = Database()
     try:
         for horo_day, value in params.items():  # SQL update horoscope texts
             sql = update(DailyModel).\

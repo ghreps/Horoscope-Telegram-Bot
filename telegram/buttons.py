@@ -20,6 +20,17 @@ daily_menu_btns = [
     Button('Послезавтра', callback_data=cb.new('3', action='daily_submenu'))
 ]
 
+weekly_menu = [
+    Button('Обычный', callback_data=cb.new('common', action='get_weekly')),
+    Button('Бизнес', callback_data=cb.new('business', action='get_weekly')),
+    Button('Любовный', callback_data=cb.new('love', action='get_weekly')),
+    Button('Здоровья', callback_data=cb.new('health', action='get_weekly')),
+    Button('Автомобильный', callback_data=cb.new('car', action='get_weekly')),
+    Button('Красоты', callback_data=cb.new('beauty', action='get_weekly')),
+    Button('Эротический', callback_data=cb.new('erotic', action='get_weekly')),
+    Button('Ювелирный', callback_data=cb.new('gold', action='get_weekly')),
+]
+
 def daily_types_btns(day):
     return [
         Button('Обычный', callback_data=cb.new(day+',common', action='get_daily')),

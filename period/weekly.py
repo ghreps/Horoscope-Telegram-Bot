@@ -1,18 +1,19 @@
 from re import sub
 from os.path import exists
 from xml.etree import ElementTree as ET
+from logging import Formatter, getLogger, FileHandler
 
 import json
-import logging
 import aiohttp
 
 from sqlalchemy import update
 
-from defines import WEEKLY, ZODIACS, FORMATTER, SQLALCHEMY_ERROR_SUB
+from defines import WEEKLY, ZODIACS, SQLALCHEMY_ERROR_SUB
 
-from telegram.telegram import send_error_msg
+from config import Config
 from db.database import Database
 from db.models import WeeklyModel, TypesModel
+from telegram.telegram import send_error_msg
 
 
 LOG_NAME = "WEEKLY.PY"
@@ -23,41 +24,44 @@ class Weekly:
     Функции еженедельного гороскопа:
     Скачивание, парсинг, запись в базу/кэш, обновление
     """
-    file_handler = None
+    log = getLogger(LOG_NAME)
 
-    log = logging.getLogger(LOG_NAME)
-    log.setLevel(logging.DEBUG)
+    config = None
 
-    database = None
-
-    def __init__(self):
+    def __init__(self, config):
+        self.config: Config = config
         self.read_config()
 
     def read_config(self):
         """Читаем конфиг"""
-        self.file_handler = logging.FileHandler('logs/weekly.log')
-        self.file_handler.setFormatter(FORMATTER)
+        formatter = self.config.get('APP', 'formatter').replace('(', '%(')
+        file_handler = FileHandler('logs/weekly.log')
+        file_handler.setFormatter(Formatter(formatter))
 
-        self.log.addHandler(self.file_handler)
+        self.log.addHandler(file_handler)
+        self.log.setLevel(self.config.get_int('WEEKLY', 'log_level'))
 
     async def start(self):
         """Я сказал стартуем"""
         func_name = "START"
         self.log.info(' Start')
         try:
-            self.database = Database()
-            sql = self.database.query(TypesModel).filter_by(file=WEEKLY[0][0]).one_or_none()
+            database = Database()
+            sql = database.query(TypesModel).filter_by(file=WEEKLY[0][0]).one_or_none()
             if sql is None:  # if first run
-                await self.insert_default_rows()  # Fill sql with default data
+                await self.insert_default_rows(database)  # Fill sql with default data
                 xml = await self.download_xml()  # Fill sql with actual data
-                await self.parse_xml(xml)
+                await self.parse_xml(xml, database)
             else:
-                await self.check_for_relevance()
-            await self.write_to_cache()
+                await self.check_for_relevance(database)
+            await self.write_to_cache(database)
         except Exception as error:
             await self.report_error(func_name, error)
+        else:
+            database.close()
+            self.log.debug('%sEnd', func_name)
 
-    async def check_for_relevance(self, force=False):
+    async def check_for_relevance(self, database: Database, force=False):
         """Проверка локальных гороскопов на актуальность"""
         func_name = "[CHECK FOR REVELANCE] "
         self.log.info('%sStart', func_name)
@@ -66,17 +70,17 @@ class Weekly:
             if not exists('xmls/weekly.xml') or force:
                 self.log.info('%sFile not exist, downloading...', func_name)
                 xml = await self.download_xml()
-                await self.parse_xml(xml)
+                await self.parse_xml(xml, database)
             else:  # Parse local xml
                 body = ET.parse('xmls/weekly.xml').getroot()
                 last_date = body[0].attrib.get('weekly')
-                sql: WeeklyModel = self.database.query(WeeklyModel).first()
+                sql: WeeklyModel = database.query(WeeklyModel).first()
                 if last_date != sql.horo_date:  # Check date in local file
                     xml = await self.download_xml()
                     if last_date == xml[0].attrib.get('weekly'):  # If same date
                         is_actual = True
                     else:
-                        await self.parse_xml(xml)
+                        await self.parse_xml(xml, database)
                 else:
                     is_actual = True
                     self.log.info('%sData is actual in local file ', func_name)
@@ -94,16 +98,14 @@ class Weekly:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url) as response:
-                    if response.status == 200:
-                        self.log.info('%sWeekly file cur.xml downloaded', func_name)
-                        self.log.debug('%sEnd', func_name)
-                        return ET.fromstring(await response.read())
-                    else:
-                        response.raise_for_status()
+                    response.raise_for_status()
+                    self.log.info('%sWeekly file cur.xml downloaded', func_name)
+                    self.log.debug('%sEnd', func_name)
+                    return ET.fromstring(await response.read())
         except Exception as error:
             raise Exception(func_name + str(error)) from error
 
-    async def parse_xml(self, xml: ET.Element):
+    async def parse_xml(self, xml: ET.Element, database: Database):
         """Парсим XML и сохраняем в базу"""
         func_name = "[PARSE XML] "
         self.log.debug('%sStart', func_name)
@@ -132,22 +134,22 @@ class Weekly:
                     'aquarius': horo_texts[10][horo_id],
                     'pisces': horo_texts[11][horo_id]
                 }
-                await self.save_to_db(texts)
+                await self.save_to_db(texts, database)
             # Save xml to file
             with open('xmls/weekly.xml', 'wb') as file:
                 ET.ElementTree(xml).write(file, encoding='utf-8')
         except Exception as error:
             raise Exception(func_name + str(error)) from error
 
-    async def save_to_db(self, params: dict):
+    async def save_to_db(self, params: dict, database: Database):
         """Сохранение в базу"""
         func_name = "[SAVE TO DB] "
         self.log.debug('%sStart', func_name)
         try:
             sql = update(WeeklyModel).\
                     where(WeeklyModel.horo_id == params['horo_id']).values(params)
-            self.database.execute(sql)
-            self.database.commit()
+            database.execute(sql)
+            database.commit()
         except Exception as error:
             raise Exception(func_name + str(error)) from error
         finally:
@@ -158,9 +160,10 @@ class Weekly:
         func_name = "[UPDATE CACHE] "
         self.log.debug('%sStart', func_name)
         try:
+            database = Database()
             if not self.check_for_relevance(True):
                 self.log.info('%sData is not actual, writе to cache...', func_name)
-                self.write_to_cache()
+                self.write_to_cache(database)
             else:
                 self.log.debug('%sData is actual', func_name)
         except Exception as error:
@@ -168,14 +171,14 @@ class Weekly:
         finally:
             self.log.debug('%sEnd', func_name)
 
-    async def write_to_cache(self):
+    async def write_to_cache(self, database: Database):
         """Считываем гороскопы с базы и пишем в кэш"""
         func_name = "[WRITE TO CACHE] "
         self.log.debug('%sStart', func_name)
         json_data = {}
         weekly = [[] for i in range(len(WEEKLY))]
         try:
-            for row in self.database.query(WeeklyModel).all():
+            for row in database.query(WeeklyModel).all():
                 weekly[row.horo_id - 10] = {
                     'horo_id': str(row.horo_id),
                     'date': row.horo_date,
@@ -205,17 +208,17 @@ class Weekly:
         finally:
             self.log.debug('%sEnd', func_name)
 
-    async def insert_default_rows(self):
+    async def insert_default_rows(self, database: Database):
         """Вставляем пустые строки в базу"""
         func_name = "[INSERT DEFAULT ROWS] "
         self.log.debug('%sStart', func_name)
         try:
             for horo_id, horo in enumerate(WEEKLY):
                 sql = TypesModel(horo_id + 10, horo[1].title(), horo[0])
-                self.database.add(sql)
+                database.add(sql)
                 sql = WeeklyModel(horo_id + 10)
-                self.database.add(sql)
-            self.database.commit()
+                database.add(sql)
+            database.commit()
         except Exception as error:
             raise Exception(func_name + str(error)) from error
         else:

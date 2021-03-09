@@ -84,21 +84,47 @@ async def call_daily_submenu(call: types.CallbackQuery, callback_data: typing.Di
 
 @dp.callback_query_handler(cb.filter(action='get_daily'))
 async def call_query_view(call: types.CallbackQuery, callback_data: typing.Dict[str, str]):
-    msg = ''
     params = callback_data['params'].split(',')
-    with open('cache/daily.json', 'r', encoding='utf-8') as f:
-            msg = parse_daily(f, params)
+    msg = parse_daily(params)
     await bot.send_message(
         call.from_user.id,
         ''.join(msg),
         reply_markup=main_menu
     )
 
-@dp.callback_query_handler(cb.filter(action='weekly_menu'))
-async def call_weekly_menu(call: types.CallbackQuery, callback_data: typing.Dict[str, str]):
+@dp.callback_query_handler(cb.filter(action='get_weekly'))
+async def call_query_view(call: types.CallbackQuery, callback_data: typing.Dict[str, str]):
+    params = callback_data['params'].split(',')
+    print(params)
+    msg = parse_weekly(params)
     await bot.send_message(
         call.from_user.id,
         'Будет позже'
+    )
+    # await bot.send_message(
+    #     call.from_user.id,
+    #     ''.join(msg),
+    #     reply_markup=main_menu
+    # )
+
+@dp.callback_query_handler(cb.filter(action='weekly_menu'))
+async def call_weekly_menu(call: types.CallbackQuery, callback_data: typing.Dict[str, str]):
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    keyboard.add(*weekly_menu)
+    msg = 'Еженедельный гороскоп...'
+    await bot.send_message(
+        call.from_user.id,
+        escape_md(msg),
+        reply_markup=keyboard
+    )
+
+@dp.callback_query_handler(cb.filter(action='my_horoscopes'))
+async def call_subscribe_menu(call: types.CallbackQuery, callback_data: typing.Dict[str, str]):
+    await bot.send_message(
+        call.from_user.id,
+        escape_md('Мои личные гороскопы'),
+        reply_markup=personal_menu
     )
 
 @dp.callback_query_handler(cb.filter(action='subscribe'))
@@ -109,9 +135,14 @@ async def call_subscribe_menu(call: types.CallbackQuery, callback_data: typing.D
     )
 
 
-def parse_daily(file, params):
+def parse_weekly(params):
+    pass
+
+def parse_daily(params):
     text = []
-    json_text = json.load(file)
+    json_text = None
+    with open('cache/daily.json', 'r', encoding='utf-8') as file:
+        json_text = json.load(file)
     # Get horo_id
     horo_id = ''
     for i, row in enumerate(DAILY):
@@ -125,7 +156,7 @@ def parse_daily(file, params):
                 date = datetime.strptime(root_value['date'], '%d.%m.%Y')
                 msg_date = '({0} {1}, {2})'.format(
                     date.strftime('%d'),
-                    MONTH_RU[date.month],
+                    MONTH_RU[date.month-1],
                     date.strftime('%A')
                 )
                 text.append(

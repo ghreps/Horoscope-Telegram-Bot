@@ -1,14 +1,15 @@
-from re import sub
+from re import sub, search
 from os.path import exists
 from xml.etree import ElementTree as ET
 from logging import Formatter, getLogger, FileHandler
 
 import json
 import aiohttp
+import datetime
 
 from sqlalchemy import update
 
-from defines import WEEKLY, ZODIACS, SQLALCHEMY_ERROR_SUB
+from defines import WEEKLY, ZODIACS, SQLALCHEMY_ERROR_SUB, OFFSET, MONTH_RU
 
 from config import Config
 from db.database import Database
@@ -59,7 +60,7 @@ class Weekly:
             await self.report_error(func_name, error)
         else:
             database.close()
-            self.log.debug('%sEnd', func_name)
+            self.log.debug(' End')
 
     async def check_for_relevance(self, database: Database, force=False):
         """Проверка локальных гороскопов на актуальность"""
@@ -67,20 +68,35 @@ class Weekly:
         self.log.info('%sStart', func_name)
         is_actual = False
         try:
+            
             if not exists('xmls/weekly.xml') or force:
                 self.log.info('%sFile not exist, downloading...', func_name)
                 xml = await self.download_xml()
                 await self.parse_xml(xml, database)
-            else:  # Parse local xml
-                body = ET.parse('xmls/weekly.xml').getroot()
-                last_date = body[0].attrib.get('weekly')
+            else:  # Parse stored sql date
+                now = datetime.datetime.now(OFFSET)
                 sql: WeeklyModel = database.query(WeeklyModel).first()
-                if last_date != sql.horo_date:  # Check date in local file
+
+                day_span= search(' \d+', sql.horo_date)
+                day = sql.horo_date[
+                    day_span.start():day_span.end()
+                ].replace(' ', '')
+
+                month_span = search('[а-яА-Я]*$', sql.horo_date)
+                month = MONTH_RU.index(
+                    sql.horo_date[month_span.start():].capitalize()
+                ) + 1
+
+                sql_date = '{0}{1}{2}'.format(
+                    now.year,
+                    month,
+                    day
+                )
+                last_date = datetime.datetime.strptime(sql_date, '%Y%m%d').date()
+                days_between = now.date() - last_date
+                if days_between.days >= -2:  # Check date in local file
                     xml = await self.download_xml()
-                    if last_date == xml[0].attrib.get('weekly'):  # If same date
-                        is_actual = True
-                    else:
-                        await self.parse_xml(xml, database)
+                    await self.parse_xml(xml, database)
                 else:
                     is_actual = True
                     self.log.info('%sData is actual in local file ', func_name)
@@ -161,7 +177,7 @@ class Weekly:
         self.log.debug('%sStart', func_name)
         try:
             database = Database()
-            if not self.check_for_relevance(True):
+            if not self.check_for_relevance(database, True):
                 self.log.info('%sData is not actual, writе to cache...', func_name)
                 self.write_to_cache(database)
             else:
@@ -176,10 +192,9 @@ class Weekly:
         func_name = "[WRITE TO CACHE] "
         self.log.debug('%sStart', func_name)
         json_data = {}
-        weekly = [[] for i in range(len(WEEKLY))]
         try:
             for row in database.query(WeeklyModel).all():
-                weekly[row.horo_id - 10] = {
+                json_data[row.horo_id - 10] = {
                     'horo_id': str(row.horo_id),
                     'date': row.horo_date,
                     'aries': row.aries,

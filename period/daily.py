@@ -56,8 +56,6 @@ class Daily:
                 #
                 with Pool(len(DAILY)) as pool:
                     result = pool.map_async(download_and_parse, range(len(DAILY)))
-                    print(result)
-                    print(result.get())
                     for horo_id, fail in enumerate(result.get()):
                         if fail:
                             await self.report_error(func_name, fail)
